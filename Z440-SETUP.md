@@ -1,0 +1,435 @@
+# Z440 executor — as built
+
+Companion to `HARNESS-PLAN.md` and `MINIPC-SETUP.md`. Records what is actually on
+`jack-1-0` (192.168.1.120) after Phases 0–4 and 6, and where the build deviates
+from the plan. Written 2026-09-07.
+
+## What runs here
+
+| Unit | State | Purpose |
+|---|---|---|
+| `llama.service` | enabled, active | Qwen3-Coder-30B-A3B, **now on `127.0.0.1:8080`** |
+| `litellm.service` | enabled, active | gateway on `127.0.0.1:4000`, alias `qwen3-coder` |
+| `llama-warmup.service` | enabled (oneshot, `After=llama.service`) | pays the HIP JIT cost at boot |
+| `agent-prune.timer` | enabled, daily | stale worktrees, merged `agent/*` branches, old logs |
+| `ufw` | **active** | `22/tcp` only |
+
+Accounts: `jack` (owner, passwordless sudo) and **`agent`** (uid 1001, **no sudo**,
+`/home/agent` mode 750). Everything the model writes happens as `agent`.
+
+Current tuning (see [Context vs quant vs tok/s](#context-vs-quant-vs-toks-measured-not-guessed)
+for how these were chosen):
+
+| knob | value | why |
+|---|---|---|
+| quant | `Q4_K_XL` | floor for a 30B-A3B; do not go lower |
+| `-c` | `65536` | every real Sorbit file fits; 128K measured slower for no gain |
+| `--n-cpu-moe` | `18` | buys the 64K KV at ~0% generate cost |
+| aider `edit-format` | `diff` | `whole` made the model re-emit the file |
+| aider `max_input_tokens` | `65536` | must track `-c` or aider plans against the wrong window |
+
+## Phase 0 — model server
+
+`llama.service` gained `--alias qwen3-coder`, `--api-key-file /etc/llama/api-keys`,
+`--parallel 1 --slots`, and moved from `0.0.0.0` to `127.0.0.1`. Unauthenticated
+requests now return **401**; the key lives in `/etc/llama/api-keys` (0640 root:jack)
+and is mirrored on the mini PC at `~/harness/etc/llama.key` (0600).
+
+Binding to loopback does not break the mini PC: the SSH tunnel terminates on the
+Z440 and connects to `localhost:8080` from there.
+
+> The firewall was enabled over the same SSH session it could have severed. It was
+> done behind a 120-second auto-`ufw disable` watchdog, cancelled only after a
+> *second, fresh* SSH connection proved the rules were survivable. Worth repeating
+> for any future rule change — `ufw allow 22` before `ufw enable` is necessary but
+> it is not proof.
+
+## Phase 1 — LiteLLM gateway
+
+`127.0.0.1:4000`, config `/etc/litellm/config.yaml`, secrets `/etc/litellm/env`
+(0640 root:jack) holding `LLAMA_KEY` and `LITELLM_MASTER_KEY`.
+
+**Caveat:** LiteLLM's per-client virtual keys need a database, which this install
+does not have. So the executor authenticates with the **master key**. Rotating it
+means editing `/etc/litellm/env` *and* `/home/agent/.env`. Adding a Postgres-backed
+LiteLLM later would let the agent hold a scoped key instead.
+
+## Phase 2 — the executor
+
+Aider 0.86.2 via `uv`, as `agent`. Config `/home/agent/.aider.conf.yml`
+(`auto-commits`, `yes-always`, `stream: false`, `map-tokens: 2048`),
+`/home/agent/.env` → LiteLLM, and **`/home/agent/.aider.model.metadata.json`
+declaring `max_input_tokens`** — not in the plan, but without it aider assumes
+a default context window and will happily build a prompt llama-server silently
+truncates.
+
+## Phase 3 — the job channel
+
+`/home/agent/bin/jobd`, reached only through a forced command:
+
+```
+command="/home/agent/bin/jobd",no-agent-forwarding,no-X11-forwarding,no-pty,no-port-forwarding,restrict ssh-ed25519 AAAA...minipc-jobd
+```
+
+`ssh z440-job < job.json > result.json` is the entire API surface.
+In: `{repo, task, tests?}`. Out: `{id, branch, exit, diff, log}`.
+
+**Three corrections to the plan's `jobd` sketch**, each of which would have bitten:
+
+1. `set -euo pipefail` — a failing test suite is *data*, not a crash. Under `-e` the
+   script would die before emitting JSON and the caller would see "non-JSON".
+   Dropped `-e`; every exit path emits valid JSON.
+2. `rc=$?` after `[ -n "$tests" ] && timeout ...` captures the **`&&` compound**, not
+   the tests. Split into an explicit `if`, with aider's exit code outranking the
+   tests' (if aider never ran, the test result is meaningless).
+3. `git diff main...HEAD` hardcodes `main`. The base branch is now read from the
+   repo's own `HEAD`.
+
+**A fourth problem only showed up under load:** aider drops an untracked `.gitignore`
+(and pytest drops `__pycache__/`) into every worktree, so a naive
+`git status --porcelain` cleanliness check never passes and **every job leaked a
+worktree onto a 45 GB disk**. `jobd` now filters known build/test junk out of that
+check only — any *other* untracked file still preserves the worktree. Branches are
+always retained; only the checkout is reclaimed.
+
+## Phase 4 — network link
+
+**Tailscale was not used.** The link is an SSH tunnel, per instruction:
+`z440-tunnel.service` on the mini PC runs
+`ssh -NT -L 127.0.0.1:8080:localhost:8080 jack@192.168.1.120`. Job dispatch does not
+use the tunnel at all — it is a separate SSH connection on the `z440-job` key.
+
+## Phase 6 — ops
+
+- `llama-warmup` polls `/health` for up to 5 min, then sends a 5-token request.
+- `agent-prune` (daily, `RandomizedDelaySec=30m`): worktrees older than 7 days,
+  `agent/*` branches **already merged into the base** (never unmerged work), and
+  logs older than 30 days.
+
+```bash
+journalctl -u llama.service -f
+journalctl -u litellm.service -f
+sudo -u agent tail -f /home/agent/logs/<id>.log
+ssh z440 'sudo -u agent git -C /home/agent/repos/scratch branch --list "agent/*"'
+```
+
+## Acceptance ladder
+
+| # | Rung | Result |
+|---|---|---|
+| 1 | `tool_calls` with the API key set | ✅ 4.7 s |
+| 2 | LiteLLM lists `qwen3-coder`, proxies a completion | ✅ |
+| 3 | Aider makes an unattended commit | ✅ |
+| 4 | One JSON job over SSH → branch + result JSON | ✅ `exit 0`, tests pass |
+| 5 | Mini PC runs that job over the network link | ✅ (SSH, not Tailscale) |
+| 6 | Planner turns a goal into a valid job JSON | Paperclip + `z440-exec` |
+| 7 | End-to-end, unattended, 3+ reviewable branches | see below |
+
+---
+
+## Integration: the Paperclip executor agent
+
+The Z440 is driven by a **second Paperclip agent**, not by Glorp. Glorp is
+`claude_local` and can only ever run Claude Code on the mini PC; it cannot be
+"moved" to the Z440. The split is: Glorp plans and writes, **Zed** dispatches.
+
+| | Glorp | Zed |
+|---|---|---|
+| id | `c0e87781-…` | `03887377-81bc-490b-b479-d19cfdc79389` |
+| adapter | `claude_local` | **`process`** |
+| runs | Claude Code, on the mini PC | `~/harness/bin/z440-exec`, on the mini PC |
+| model | Claude Pro subscription | Qwen3-Coder on the Z440, via SSH |
+| wakeups | timer + assignment | **assignment only** |
+
+`z440-exec` is the bridge: Paperclip wakes it, it picks its assigned issue, claims
+it, turns the description into a `jobd` job, ships it over SSH, and writes the result
+back. `Repo:` / `Tests:` / `Branch:` lines in an issue description override the
+defaults; everything else becomes the task text.
+
+> **Why a bridge exists at all.** `HARNESS-PLAN.md` says the `process` adapter has no
+> generic mode and that Aider needs a custom adapter. That is wrong — `process` is
+> fully generic (`command`/`args`/`cwd`/`env`/`timeoutSec`/`graceSec`). The real
+> constraint, which the plan omits, is that **it does not pipe the task to stdin**
+> (`server/src/adapters/process/execute.ts`). The command is told *which agent it is*
+> through the environment and must fetch its own work from the API. Hence `z440-exec`
+> rather than a one-line `ssh` command.
+
+### Two bugs found by running it for real
+
+**1. `in_review` is refused for agents (HTTP 422).**
+Paperclip rejects an agent-authored move to `in_review` with
+`invalid_issue_disposition: … would leave the issue in_review without anyone or
+anything owning the next action`. A successful job now also sets
+`assigneeUserId` (default `local-board`, override with `Z440_REVIEWER_USER_ID`), so a
+named human owns the review of the branch.
+
+**2. That refusal caused a runaway.** The failed `PATCH` left the issue checked out in
+`in_progress`; the next assignment wakeup re-claimed it through the crash-recovery
+path and dispatched the job again. Four wakeups, **four real GPU jobs, zero recorded
+results.** `report()` now treats the write as the thing that must not be lost: on a
+failed `PATCH` it records the result as a plain comment, resets the status to `todo`,
+and releases the checkout if even that fails. An issue is never left checked out by a
+run that has ended.
+
+> The crash-recovery re-claim is deliberate and worth keeping — a genuinely crashed
+> run should be retried. But it is only safe when every *non-crash* exit path
+> reliably clears the checkout. That invariant is what was missing.
+
+### A third finding: not every wakeup carries issue context
+
+`paperclipai agent wake <id>` creates an **`on_demand` run with no bound issue**
+(`PAPERCLIP_TASK_ID` unset, scratch dir named `…-unassigned-…`). Paperclip then
+treats *any* issue write from that run as "cross-issue" and fail-closes:
+
+```js
+// server/src/services/cross-issue-influence-limit.ts
+const sourceIssueId = readRunSourceIssueId(run.contextSnapshot);
+if (!sourceIssueId) throw crossIssueInfluenceRunContextError();   // 403
+```
+
+The `X-Paperclip-Run-Id` header was present and correct; the run itself had nothing
+to attribute the write *to*. **Assignment** wakeups do bind the issue — which is why
+the earlier assignment runs reached the 422 disposition check while a manual wake
+never got that far.
+
+Practical consequences:
+
+- **Test with a real assignment**, not `agent wake`. A manual wake exercises a
+  different, weaker context and will mislead you.
+- `z440-exec` now prefers `PAPERCLIP_TASK_ID` (the run's own issue) and only falls
+  back to querying the assigned queue. Working the run's bound issue keeps every
+  write same-issue, so the 20-writes-per-run cross-issue cap never applies.
+
+### A fourth: one assignee, not two
+
+`in_review` + `assigneeUserId` was still refused with `Issue can only have one
+assignee`. Handing work to a human reviewer means **standing down as the agent
+assignee in the same write**, so the successful path now sends
+`assigneeAgentId: null` alongside `assigneeUserId`.
+
+### End-to-end result
+
+```
+[z440-exec] picked e65cca29-…: Add a slugify(text) helper to main.py
+[z440-exec] dispatching to z440-job: scratch / 'Add a slugify(text) helper…'
+[z440-exec] issue e65cca29-… -> in_review          (18 s later)
+```
+
+Issue `SOR-3`: `status=in_review`, `assigneeAgentId=None`,
+`assigneeUserId=local-board`, with a comment carrying the branch, exit code, diff
+stat and log tail. Branch `agent/20260907-150555-20410` holds a correct `slugify()`
+with a docstring, and `pytest` passed. **Rung 7 met.**
+
+## Operating notes
+
+- **Assignment wakeups fire on a *change* of assignee.** Re-assigning an issue to
+  the agent that already holds it is a no-op and wakes nothing. To re-run,
+  unassign then assign (`PATCH {"assigneeAgentId": null}` then assign).
+- **Zed's timer wakeup is deliberately off.** Every wakeup can cost a real GPU job,
+  and the box runs one job at a time under `flock`. Work reaches Zed by assignment.
+- Issue description fields the bridge understands:
+  ```
+  Repo:   scratch          # must exist under /home/agent/repos
+  Tests:  python3 -m pytest -q
+  Branch: <ignored for now>
+  ```
+- `~/harness/bin/z440-exec --selftest` checks the API and the SSH channel without
+  running a job; `--dry-run` prints the job JSON it would send.
+- The `scratch` repo holds ~11 `agent/*` branches from this build-out. They are
+  unmerged, so `agent-prune` will not touch them; delete them by hand when done.
+
+## The Sorbit repo
+
+`/home/agent/repos/sorbit`, cloned from `/home/jack/Documents/Sorbit` on
+**`prod-testing`** (the repo's `origin/HEAD`). 118 MB — jack's 1.1 GB copy is mostly
+untracked `node_modules` and build output. `origin` points at
+`git@github.com:Sorbit-ltd/Sorbit.git` for provenance, but the `agent` account holds
+no GitHub key, so it cannot fetch or push. That is deliberate: the agent's work never
+leaves the box until a human reviews an `agent/*` branch.
+
+> **Why a clone and not jack's checkout.** `agent` cannot read `/home/jack`
+> (mode 750), and the fix is *not* to open that up. Jack's working copy contains
+> `sorbit-1a42f-firebase-adminsdk-*.json` — a live Firebase **admin** credential.
+> It is gitignored and untracked, so `git clone` leaves it behind; sharing the
+> directory would have handed model-written code an admin key to production. The
+> clone was verified to not contain it.
+
+Also: `Z440_DEFAULT_REPO=sorbit` is set in Zed's `adapterConfig.env`, so an issue
+with no `Repo:` line targets Sorbit rather than `scratch`.
+
+### `Files:` — the field that makes a big repo tractable
+
+Aider's repo map is capped at 2048 tokens against a 64K window. On `scratch` it found
+`main.py` unaided; on Sorbit it will not reliably find anything. The job contract now
+carries a **`Files:`** list, passed straight through to aider as the files it may edit:
+
+```
+Repo:  sorbit
+Files: app-frontend/sorbit_app/cloud-run/src/modules/shared/logging.js
+```
+
+Measured effect: a real Sorbit edit sent **3.2k tokens** instead of tens of thousands.
+That matters for more than fitting the window — generate throughput falls with KV
+depth (see below), so an unscoped prompt is billed twice. Without `Files:`
+the model is guessing at a repo it cannot see.
+
+### One more worktree leak, found on Sorbit
+
+Aider appends `.aider*` to `.gitignore`. On `scratch` that file did not exist, so it
+showed up as untracked (`?? .gitignore`) and the junk filter caught it. Sorbit
+*has* a `.gitignore`, so aider **modified a tracked file** (` M .gitignore`) — which
+the filter did not catch, and every job leaked its worktree again.
+
+Fixed at the source rather than by widening the filter: `gitignore: false` in
+`.aider.conf.yml` stops aider editing it, and `jobd` now appends `.aider*` to the
+repo's `.git/info/exclude` (shared common dir, so once per repo). Verified: worktree
+reclaimed, branch retained, `/home/agent/work` empty.
+
+> Worth noting the shape of this bug — the first fix was correct *for the repo it was
+> tested on*. A filter tuned on a repo with no `.gitignore` silently stopped working
+> on a repo that has one. Suppressing the symptom is what made it fragile; stopping
+> the write is what made it right.
+
+
+## Context budget: the edit format mattered more than the window
+
+Question raised: can the orchestrator feed a *snippet* of a large Flutter file
+instead of the whole thing, or do we need a bigger context window?
+
+**Snippets: no, not with aider.** A file added to the chat is sent whole, every
+request. Aider needs the complete text to anchor SEARCH/REPLACE blocks and to
+check they match uniquely. The repo map is the only snippet-shaped thing it
+sends, and only for files it is *not* editing. There is no partial-file mode.
+
+**But the window was not the binding constraint — the output was.** Aider does
+not recognise `openai/qwen3-coder`, so it defaulted to `whole` edit format: the
+model had to re-emit the entire file. That makes the cost roughly 2x the file,
+and the *generation* side is the half that blows up.
+
+Fixed with `edit-format: diff` in `.aider.conf.yml`. Measured on
+`lib/pages/info/learningStyleQuizPage.dart` (58 KB):
+
+| edit format | sent | received | fits 32K? |
+|---|---|---|---|
+| `whole` (was) | ~16k | ~16k | no, at/over the limit |
+| `diff` (now)  | 16k  | 636    | yes, comfortably |
+
+Sorbit's 338 Dart files by size:
+
+| bytes | count | verdict |
+|---|---|---|
+| <=20 KB | 254 | easy |
+| 20-70 KB | 64 | fits with `diff` |
+| 70-140 KB | 18 | fits at 64K (`chatpage.dart` 131 KB = 29k tokens) |
+| >140 KB | 2 | `teacherParentHome.dart` 222 KB = 41k tokens, fits at 64K; `list_english_words.dart` 1.2 MB is a word list, not editable code |
+
+At 32K this read as ~318/338 editable. **That estimate was wrong** — it assumed
+~3.6 bytes/token from a dense file. Dart here tokenizes at ~5.4 bytes/token, so
+after the move to 64K every real code file in the repo fits, 222 KB one included
+(measured, not projected). A 222 KB widget file is still a refactor waiting to
+happen, but it is no longer a context problem.
+
+**If a bigger window is wanted anyway**, the lever is `--n-cpu-moe`, not the
+quant. KV at 32K is ~1.7 GB; 64K costs ~1.7 GB more. The card has 17.1 GB total
+and the model file alone is 17.6 GB, so it is already spilling — buy the KV
+space by raising `--n-cpu-moe` from 12 (costs tok/s, no quality loss). Note the
+direction on quant: a *higher* quant is bigger and leaves less room. Only a
+*smaller* quant frees VRAM, and it pays for context in code quality, which is
+the worst trade of the three.
+
+Caveat from the test edit: the model put the dartdoc above the imports rather
+than above the class. Context was not the limiter there — instruction-following
+was.
+
+## Context vs quant vs tok/s: measured, not guessed
+
+The standing question was whether to buy context by dropping the quant (losing
+code quality) or by offloading more experts to RAM (losing tok/s). Benchmarked
+both axes on the real hardware with a ~11.7k-token Sorbit prompt.
+
+| config | VRAM used | prefill tok/s | generate tok/s |
+|---|---|---|---|
+| `--n-cpu-moe 12 -c 32768` (was) | 16.2 GB | ~780 | 20.0 |
+| `--n-cpu-moe 18 -c 65536` (now) | 15.8 GB | 571 | 19.98 |
+| `--n-cpu-moe 28 -c 131072` | 16.0 GB | 454 | 18.7 |
+
+**Generation speed is almost unaffected by offloading.** 12 -> 28 CPU-MoE layers
+costs 6.5% of generate throughput. The whole cost lands on prefill (-42%).
+This is an A3B property: only ~3B params activate per token and each token
+routes to a handful of experts, so the extra host-RAM expert fetches hide behind
+GPU work at batch 1. The fear of dropping to ~10 tok/s was unfounded.
+
+Projected onto the real 58 KB diff-format job (16.2k prompt, 636 generated):
+
+| config | prefill | generate | total |
+|---|---|---|---|
+| 32K / moe 12 | 20.8 s | 31.9 s | 52.7 s |
+| 64K / moe 18 | 28.3 s | 31.8 s | 60.1 s (+14%) |
+| 128K / moe 28 | 35.6 s | 34.0 s | 69.6 s (+32%) |
+
+**Settled on 64K / `--n-cpu-moe 18`.** 128K is available for ~32% wall clock if a
+task ever needs it, but prefill is the dominant cost at these prompt sizes and a
+bigger nominal window buys little for file-scoped edits.
+
+Do **not** buy context by dropping the quant. Q4_K_XL is roughly the floor for a
+30B-A3B: with only ~3B active params there are far fewer weights carrying each
+activation than in a dense model, so sub-Q4 degrades sharply. The failure mode is
+syntactically valid, subtly wrong code — the worst possible failure in a harness
+that has no test execution to catch it. Offload is nearly free; quant is not.
+
+Applied: `llama.service` now `--n-cpu-moe 18 -c 65536` (old file kept at
+`llama.service.bak-ctx32k`), and `.aider.model.metadata.json` raised to
+`max_input_tokens: 65536` — without that aider still plans against 32K.
+
+### 64K vs 128K on real large files
+
+Ran the same edit ("add a one-line comment naming the primary class") against
+Sorbit's two biggest real code files under both configs.
+
+`chatpage.dart` (131 KB, 29.2k prompt tokens):
+
+| config | prefill | generate | server total | wall |
+|---|---|---|---|---|
+| 64K / moe 18 | 533 tok/s (54.7 s) | 17.03 tok/s (38.6 s) | 93.3 s | 132 s |
+| 128K / moe 28 | 431 tok/s (67.6 s) | 15.67 tok/s (42.0 s) | 109.6 s | 149 s |
+
+`teacherParentHome.dart` (222 KB, 40.8k prompt tokens):
+
+| config | prefill | generate | server total | wall |
+|---|---|---|---|---|
+| 64K / moe 18 | 481 tok/s (84.7 s) | 15.37 tok/s (51.1 s) | 135.8 s | 175 s |
+| 128K / moe 28 | - | - | - | 194 s |
+
+**128K is 11-17% slower and buys nothing.** Both configs produced byte-identical
+commits on both files. The 222 KB file — the largest real code file in the repo —
+is only ~41k tokens, because Flutter widget code is repetitive and tokenizes at
+~5.4 bytes/token. Everything in Sorbit fits in 64K. Reverted to
+`--n-cpu-moe 18 -c 65536`; 128K is a flag flip if a genuinely larger task appears.
+
+**Generation speed falls with KV depth, not with offload** — this is the real
+throughput story:
+
+| prompt tokens | generate tok/s |
+|---|---|
+| 11.7k | 20.0 |
+| 29.2k | 17.0 |
+| 40.8k | 15.4 |
+
+So the cost of a big prompt is paid twice: once in prefill, and again as a
+slower generate for the whole response. Another argument for `Files:` scoping
+over brute-force context.
+
+Byte estimate for planning: Dart tokenizes at roughly **5.4 bytes/token** here,
+not the ~3.6 assumed earlier from a denser file.
+
+## Still open
+
+- **No test execution.** Node, npm and Flutter are not installed for `agent`, so
+  Sorbit's suites (mocha in `app-frontend/sorbit_app/cloud-run`, `flutter test`)
+  cannot run here. Jobs return `exit 0` with no test signal; tests are a human step
+  at review time. This was a deliberate choice, not an oversight — installing Node
+  would enable `test:unit`, and the Postgres suites would additionally need the
+  `agent` account in the `docker` group, which is root-equivalent on this box and
+  would undo its no-sudo isolation.
+- **LiteLLM uses its master key** for the agent (no DB, so no virtual keys).
+- **The `hire_agent` approval for "Ledger"** (`078952ae-…`) is still pending.
