@@ -1,9 +1,23 @@
 # Mini-PC → Z440 coder harness — build plan
 
+> **This is the original plan (2026-09-04), kept as the record of the reasoning.**
+> It has been built, and the build departed from it. For the current state read
+> `../README.md`, which points to the current docs;
+> where they disagree with this file, they win. The main differences:
+> - The executor runs a **64K** window (`--n-cpu-moe 18`), not 32K. So the
+>   "32K" constraints and the "Verified facts" table below are historical.
+> - **Aider needed no custom adapter.** A Paperclip `process` agent (Zed) runs a
+>   bridge script, `z440-exec`. Hermes is not used anywhere.
+> - The mini PC → Z440 link is **plain LAN SSH**, not Tailscale.
+> - The planner is **Glorp**, Claude Code on DeepSeek V4.1-Flash, behind a
+>   spending meter.
+> - Test execution, integration branches and an end-of-goal verify agent were
+>   added (`FANOUT-PLAN.md`).
+
 Two machines, clean split of duties:
 
 ```
-  MINI PC  "orchestrator"                 Z440  "executor"  (this box, 192.168.1.120)
+  MINI PC  "orchestrator"                 Z440  "executor"  (this box, 192.168.1.199)
   ─────────────────────────               ──────────────────────────────────────────
   planner LLM (big context)               llama-server :8080  Qwen3-Coder-30B-A3B
   scans repos → repo map                  LiteLLM gateway :4000  (auth + alias + log)
@@ -23,7 +37,7 @@ runtime; locally it never leaves the box.
 
 | Thing | Value |
 |---|---|
-| Host / IP | `jack-1-0` / `192.168.1.120`, Ubuntu 24.04.4, 12 cores, 31 GB RAM |
+| Host / IP | `jack-1-0` / `192.168.1.199`, Ubuntu 24.04.4, 12 cores, 31 GB RAM |
 | Model server | `llama.service` active, build 10743, 32K ctx, KV q8_0 |
 | Generation speed | **22 tok/s** (measured, 8.6K-token prompt) |
 | Prompt processing | **849 tok/s** on ROCm — vs ~75 tok/s on Vulkan, which is why ROCm won |
@@ -224,7 +238,7 @@ not an arbitrary shell. This is what makes the whole design safe to leave runnin
    Now `ssh agent@z440 < job.json > result.json` is the *entire* API surface, and
    that key can do nothing else.
 
-✅ Gate: from the mini PC, `echo '{"repo":"scratch","task":"add a README"}' | ssh agent@192.168.1.120 | jq .`
+✅ Gate: from the mini PC, `echo '{"repo":"scratch","task":"add a README"}' | ssh agent@192.168.1.199 | jq .`
 returns a result object and a new `agent/<id>` branch exists on the Z440.
 
 ---
