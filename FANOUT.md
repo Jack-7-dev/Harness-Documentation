@@ -544,3 +544,127 @@ backup file on the Z440 or mini PC marks when it landed.
 - **Glorp moved to DeepSeek** on 2026-09-11 (`MINIPC.md`).
 - **Sampling fix (2026-09-18).** Aider had been sending `temperature: 0`, so every
   unit was decoded greedily (`Z440.md`).
+- **Z440 base sync (2026-09-18).** The Z440 has no GitHub credential, and
+  nothing had ever refreshed its clone: `prod-testing` sat at `fe505ada` while
+  GitHub was 84 commits ahead at `bd951831`. Glorp planned against the fresh
+  infra-reader mirror, but Zed edited the stale tree, so a goal touching new code
+  (the corporate documents feature) could not have landed. Now
+  `infra-reader-sync.service` has `OnSuccess=z440-sorbit-push.service`, which
+  bundles the missing commits from the mirror and sends them over a new
+  forced-command key (`/etc/z440-sync/key`) to `/home/agent/bin/syncd`. syncd
+  fast-forwards only, takes the GPU and verify locks non-blocking (a busy Z440
+  is retried at the next sync), and re-runs `npm ci` / `flutter pub get` when
+  their lockfiles moved; a failed install is retried via
+  `.git/syncd-setup-from`. Sources and installer: `~/harness/z440-sync/`.
+  Deliberately no second GitHub App on the Z440: the `agent` account runs
+  model-written code, so a token there would be reachable by it.
+- **Aider auto-lint rewrote valid SQL (2026-09-18, SOR-63).** Aider's default
+  tree-sitter lint flags valid Postgres (`BETWEEN` inside `CHECK`,
+  `DEFAULT CURRENT_DATE`). With `yes-always` it asked the model to "fix" it,
+  three rounds, each auto-committed: out-of-scope edits to `01-schema.sql`, one
+  of which (`DEFAULT 'CURRENT_DATE'`) broke schema init. The per-unit gate
+  never saw it (unit suite only). `.aider.conf.yml` now sets
+  `lint-cmd: sql: node /home/agent/tools/check-sql.js`, the libpg-query
+  checker verifyd already trusts (backup `.aider.conf.yml.bak-presqllint`).
+  Tested through aider's own `Linter`: the default flags the untouched schema,
+  the new command passes it and still rejects a broken file.
+- **Code and its tests in separate units (2026-09-18, SOR-63).** Unit 1 created
+  a six-function module with two functions missing and went green, because
+  nothing tested it yet; the next unit was told to fit the tests to the module.
+  A corrective unit given the module verbatim also deviated (returned
+  `[Buffer]`, dropped `ignoreNotFound`). Glorp's instructions now require code
+  and its tests in one unit, forbid bending tests to code, and ask it to list
+  units no test reaches. Backup `~/harness/state/glorp-AGENTS.md.bak-20260918`.
+- **Goal disposition after dispatch.** Glorp's run ended with the goal
+  `in_progress` and no blocker; Paperclip's recovery escalated it to a bare
+  `blocked`. `goal-fanout` now parks the goal `blocked` by its verify issue.
+  On green, `z440-verify` first clears the goal's blockers, then hands it to
+  the human, and only then closes verify, so no dependency wakeup reaches
+  Glorp (backups `*.bak-prehandoff`). The clearing write is needed: Paperclip
+  refuses an agent's status change on a `blocked` issue while any blocker is
+  unresolved (409, judged on the pre-write state), and a write that changes no
+  status is exempt. The first version skipped it and SOR-63's handback failed.
+- **Units must change every file they name (2026-09-21).** SOR-63's combined
+  unit was told to edit a module and create its test file; it edited only the
+  module and went green, since the suite never saw the missing tests. `jobd`
+  now fails a unit (exit 6) when any file in its `Files:` list is unchanged in
+  the unit's own commits, and puts an `UNDER-APPLIED` line naming the files at
+  the end of the log, where the retry feedback picks it up (backup
+  `jobd.bak-precoverage`). Tested live on `scratch`: a unit naming two files
+  and editing one exits 6; one naming and editing one file exits 0.
+- **Unit tasks were truncated to 1200 characters (fixed 2026-09-21).** When Zed's
+  run was not bound to an issue, `z440-exec` took the unit from Paperclip's list
+  endpoint, which cuts descriptions at `ISSUE_LIST_DESCRIPTION_MAX_CHARS` (1200),
+  and sent that to the model as its task. Glorp found it on SOR-83: the landed
+  helper stopped exactly at character 1200, before its `module.exports` line and
+  the test-file spec. 29 past Zed units had descriptions over 1200 characters;
+  any that ran unbound got a clipped task, which may account for several
+  "under-applied" results (SOR-65, SOR-73, SOR-80). `pick_issue()` now re-reads
+  a queue-picked issue by id and refuses to dispatch if that fails (backup
+  `z440-exec.bak-prefulldesc`). Verified: the task sent for SOR-83 went from
+  1068 to 2278 characters.
+- **Do not un-assign and re-assign a unit to wake Zed.** Units block their
+  verify issue, and Paperclip's orphan-blocker recovery hands an unassigned
+  blocker to the agent that created it (Glorp) within the same second (SOR-83,
+  2026-09-21). Wake an agent on an issue with
+  `POST /api/agents/<id>/wakeup {"payload":{"issueId":"<id>"}}` instead. To reset
+  a unit's three strikes, a comment must contain `**z440 retry cycle reset**`;
+  comment text never reaches the model, so guidance goes in the description.
+- **A refused unit now says so (2026-09-21).** When a unit with three strikes
+  was woken again without a reset, `z440-exec` logged "leaving for human
+  review" and returned, leaving the unit `in_progress` with no run until
+  Paperclip's continuation recovery blocked it with no explanation (SOR-83,
+  twice). It now puts the unit back in `blocked` with the board unblock
+  descriptor and a comment explaining how to reset it (backup
+  `z440-exec.bak-prereblock`).
+- **End-to-end check (SOR-82, 2026-09-21), all fixes above in place.** Two
+  units (helper, then its tests), verify green at 511 tests, goal handed to
+  `local-board` with no agent assignee and no blockers, and no planner wake
+  afterwards. The handback fix was also confirmed on a real goal: SOR-79's
+  verify at 14:54 hit the 409 on the old code, and its re-verify at 15:05, on
+  the new code, handed over cleanly.
+- **Sentinel reviews a unit after its third failure (2026-09-21).** Instead of
+  going straight to a human, a unit whose third attempt fails its checks is
+  assigned to Sentinel with a `**z440 sentinel escalation**` comment. Sentinel
+  diagnoses the three failure reports, rewrites the unit's description (the
+  only text the model sees) and hands it back to Zed with a retry-cycle reset,
+  or blocks it for the board if a rewrite cannot fix it. One pass per unit: a
+  second three-strike cycle blocks for a human. Infrastructure errors (Z440
+  unreachable) never escalate. Tested live on SOR-89: three red attempts,
+  Sentinel found the task's `Files:`/"no other file" contradiction and the
+  Jest-vs-chai mistake, rewrote it, and Zed passed first time. Sentinel's
+  procedure is in its instructions (backup
+  `~/harness/state/sentinel-AGENTS.md.bak-20260921`); `z440-exec` backup
+  `z440-exec.bak-presentinel`.
+- **Green goals are pushed and opened as PRs (2026-09-21).** On green,
+  `z440-verify` asks verifyd for an `export` (a bundle of `agent/goal-*` beyond
+  the manifest base, so the Z440 still holds no credential), and posts it to
+  `infra-reader`'s `/v1/github/publish`. That route takes only a separate
+  publish key (`/etc/infra-reader/publish-key`, copy in
+  `~charlie/.config/infra-publish/key`; Glorp can read neither and its key gets
+  401). It pushes only `agent/goal-*`, never force-pushes, opens or reuses a
+  PR into `prod-testing`, and refuses branches touching `.github/` (PR
+  workflows run with repo secrets). The PR link goes in the handback comment;
+  a failed publish never blocks the handback. Tested against a fake GitHub
+  (`infra-reader/test/test-publish.sh`, 8 cases) and live up to GitHub's write
+  check. `glorp-sync` was upgraded to contents and pull-requests write the same
+  day, and a live publish opened PR #461 (2 files, head
+  `agent/goal-format-bytes-helper`, base `prod-testing`), which was then closed
+  and its branch deleted. Backups `*.bak-prepublish`, `verifyd.bak-preexport`.
+  `Z440_PUBLISH=0` on Verity turns it off.
+- **Branch guard in place of GitHub branch protection (2026-09-21).** Branch
+  protection needs a paid plan, and the App now has contents write. Every
+  publisher push runs through a root-owned `pre-push` hook
+  (`/usr/local/lib/infra-reader/hooks/pre-push`, passed as `core.hooksPath` on
+  the push itself, so the service user can neither edit nor skip it). It
+  refuses any push that writes a ref other than `refs/heads/agent/goal-*`,
+  any deletion, and any push at all while a local copy of `prod`,
+  `pre-testing`, `prod-testing` or `master` differs from the remote. The
+  publisher refuses to push if the hook is missing. Glorp itself has no push
+  path: no GitHub credential, no internet route, and a 401 on the publish
+  route. `test-publish.sh` covers it (15 checks, including a write to `prod`
+  with the publisher's own checks bypassed). The guard only covers pushes; the
+  App key could still change those branches through the GitHub API, so the key
+  stays readable by root and the `infrareader` service only.
+- **Verity had the same 1200-character truncation** on its queue path; fixed
+  the same way (`z440-verify.bak-prefulldesc`).

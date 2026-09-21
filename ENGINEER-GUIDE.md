@@ -43,7 +43,7 @@ without a password, which is how you review the finished code (section 5).
 | Agent | Brain | What it does | When it runs |
 |---|---|---|---|
 | **Glorp** | DeepSeek V4.1-Flash (cloud API, metered) | **The planner.** Reads the Sorbit repo, decides the smallest set of changes, and writes a plan of *units* (normally one file each, with exact instructions). Then runs `goal-fanout`, which creates the integration branch `agent/goal-<slug>` and one child issue per unit. **It never writes code itself.** | When you assign it an issue, or comment on an issue it holds |
-| **Zed** | Qwen3-Coder on the Z440 (local, free) | **The coder.** Takes one unit, ships it to the Z440, where Aider edits the named file(s), commits, and runs the Node unit tests. A unit that changes Dart also runs `flutter analyze` on its touched Dart files before fan-in. If every applicable check passes, the commit is added to the integration branch. If not, the branch is left alone and Paperclip queues an issue-bound retry automatically; the third failed attempt moves the unit to `blocked`. | Automatically, as each unit issue is assigned to it. **One at a time**, because there's one GPU. |
+| **Zed** | Qwen3-Coder on the Z440 (local, free) | **The coder.** Takes one unit, ships it to the Z440, where Aider edits the named file(s), commits, and runs the Node unit tests. A unit that changes Dart also runs `flutter analyze` on its touched Dart files before fan-in, and every unit must change each file it names. If every applicable check passes, the commit is added to the integration branch. If not, the branch is left alone and Paperclip queues an issue-bound retry automatically; the third failed attempt moves the unit to `blocked`. | Automatically, as each unit issue is assigned to it. **One at a time**, because there's one GPU. |
 | **Verity** | none (just runs checks) | **The checker.** Once every unit is done, it runs the Node unit suite against the whole integration branch. If the goal touched Dart files, it also runs `flutter analyze` against only those files. **Green:** marks the goal `in_review` and hands it to a human. **Red:** creates up to 4 scoped fix issues for Zed and re-checks, for at most 2 rounds, then parks the goal as `blocked` for a human. | Automatically, when the last unit finishes. It doesn't need the GPU, so it can run alongside Zed. |
 | **Database Operator** | none (runs fixed scripts) | Applies **reviewed, named** live-database runbooks. An issue picks one by name (`Database-Operation: <runbook>` plus `Apply: true`); it never turns issue text into SQL. Not part of the coding flow, so leave it alone unless Charlie asks. | Only when an issue is assigned to it |
 | **Sentinel** | DeepSeek Flash (same backend as Glorp) | **The productivity reviewer.** Receives Paperclip's high-churn review issues, examines the source run history and diagnostics, and decides whether to continue, decompose, reroute, close the review, or escalate to the board. It does not edit application code. | Automatically when Paperclip's high-churn watchdog opens a review for Zed. |
@@ -189,8 +189,9 @@ Don't touch: the hashing function and the public signature of
 | Glorp comments a summary of units | Plan made, units queued | Nothing, just wait |
 | Child issues appear, assigned to **Zed** | Units running one by one | Nothing. Click in to watch progress. |
 | A **Verify** child assigned to **Verity** | Waiting for the last unit | Nothing |
-| Goal goes **`in_review`**, assigned to you/the board | ✅ All units landed, suite green | **Review the diff** (below) |
-| Goal or a unit is **`blocked`** | A unit failed 3 times, or verify stayed red after 2 fix rounds | Read the failure comment. Re-scope the goal, or fix it by hand. |
+| Goal goes **`in_review`**, assigned to you/the board | ✅ All units landed, suite green. The handback comment links a **pull request** into `prod-testing` | **Review the PR** in GitHub (below) and merge it yourself |
+| A unit is assigned to **Sentinel** | It failed 3 attempts; Sentinel is diagnosing it and rewriting the task | Nothing. It goes back to Zed for 3 more attempts |
+| Goal or a unit is **`blocked`** | A unit failed 3 times after Sentinel's rewrite (or Sentinel judged it unfixable), or verify stayed red after 2 fix rounds | Read Sentinel's diagnosis and the failure comments. Re-scope the goal, or fix it by hand. |
 | Glorp asked a question | Goal too vague to split safely | Answer in a comment |
 
 ### Reviewing: this step matters
@@ -229,9 +230,12 @@ fixed viewer commands; arbitrary `gcloud`, IAM, deployment and secret-value
 access are not available. Credentials never enter Glorp's environment. Audit
 records are available with `journalctl -u infra-reader.service`.
 
-So **always read the diff.** The verify comment on the goal names the
-integration branch, `agent/goal-<slug>`. The work lives **only on the Z440**,
-so read it from there. From your `ssh glorp` shell:
+So **always read the diff.** On a green verify the branch `agent/goal-<slug>`
+is pushed to GitHub and a pull request into `prod-testing` is opened; the
+handback comment on the goal links it. Review and merge it there like any PR.
+Nothing merges automatically. If the comment says **PR not opened**, it gives
+the reason, and the branch is still on the Z440. Read it there from your
+`ssh glorp` shell:
 
 ```sh
 # list goal branches
@@ -243,9 +247,13 @@ ssh z440 "sudo -u agent git -C /home/agent/repos/sorbit diff --stat prod-testing
 ssh z440 "sudo -u agent git -C /home/agent/repos/sorbit log -p prod-testing..$B" | less
 ```
 
-These commands only read. Nothing is pushed to GitHub automatically: a human
-carrying a reviewed branch across is the only way it reaches the remote.
-Agree with Charlie how reviewed branches get merged.
+These commands only read. The push is done by the harness's publisher
+(`infra-reader`), never by an agent directly: it only ever writes
+`agent/goal-*` branches, never force-pushes, only opens PRs into
+`prod-testing`, and refuses any branch that touches `.github/`. A pre-push
+guard also refuses any push while the publisher's copy of `prod`,
+`pre-testing`, `prod-testing` or `master` differs from GitHub. Merging is
+always a human's job.
 
 ---
 
@@ -269,7 +277,7 @@ Agree with Charlie how reviewed branches get merged.
 | `Permission denied` | Wrong password. Check it with Charlie, in person. |
 | `ssh z440` asks for a password | You ran it on your own machine. Run it from inside your `ssh glorp` session. |
 | `bind: Address already in use` | Something else on your machine uses port 3100. Change `LocalForward 3100` to `LocalForward 3200 127.0.0.1:3100` and browse to `localhost:3200`. |
-| Assigned to Glorp, nothing happens | Assignment only wakes Glorp when the assignee **changes**. Unassign, save, then assign again. |
+| Assigned to Glorp, nothing happens | Assignment only wakes Glorp when the assignee **changes**. Unassign, save, then assign again. This is safe for a goal you created, but **never do it to a unit** (a child issue assigned to Zed): Paperclip hands an unassigned unit to Glorp. Ask Charlie instead. |
 | Glorp paused / "cap" in the run log | A spend cap was hit. It resumes by itself when the window rolls over. |
 | Goal stuck on a unit for > 1 hour | Jobs time out at 1 hour. Check the unit's comments, then tell Charlie. |
 

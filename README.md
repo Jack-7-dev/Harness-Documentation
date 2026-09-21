@@ -39,6 +39,7 @@ run after every unit, and the finished branch comes back to a human for review.
 systemctl --user status paperclipai z440-tunnel
 curl -s localhost:4100/_meter/status | jq '{open, windows}'
 curl -s -o /dev/null -w '%{http_code}\n' localhost:3100/api/health   # Paperclip
+journalctl -u z440-sorbit-push -n 3 -o cat                          # Z440 base sync
 
 # Z440
 ssh z440 'systemctl is-active llama litellm; curl -s localhost:8080/health; df -h / | tail -1'

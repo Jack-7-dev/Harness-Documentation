@@ -83,7 +83,12 @@ no longer calls the Claude usage endpoint. See [Glorp on DeepSeek](#glorp-on-dee
 `deepseek-meter` (:4100, user `dsmeter`), `paperclip-gate` (:3101),
 `glorp-firewall`, the `home-glorp-Sorbit.mount` read-only bind, and
 `infra-reader` + `infra-reader-sync.timer` (Glorp's read-only GitHub/Neon/GCP
-gateway, described in `ENGINEER-GUIDE.md`). Also `tailscaled`.
+gateway, described in `ENGINEER-GUIDE.md`). Since 2026-09-21 infra-reader also
+has one write: `/v1/github/publish`, called only by Verity with a separate
+publish key, pushing `agent/goal-*` branches through a pre-push guard and
+opening PRs into `prod-testing` (see `FANOUT.md`). `infra-reader-sync` also
+triggers `z440-sorbit-push` (`OnSuccess=`), which fast-forwards the Z440's
+Sorbit clone from the mirror. Also `tailscaled`.
 
 **Claude Code:** 2.1.276 for `charlie`; Glorp's copy in `/opt/glorp` is pinned at
 2.1.268 and changes only with `sudo glorp-sync-tools`.
@@ -405,7 +410,11 @@ What glorp can use:
   already.
 - Root-owned copies of `claude` (pinned at 2.1.268, never auto-updated),
   `node`, `jq`, the Paperclip CLI and `goal-fanout` in `/opt/glorp`.
-  Refresh them with `sudo glorp-sync-tools`.
+  Refresh them with `sudo glorp-sync-tools`. The Claude pin is a version in the
+  script (`GLORP_CLAUDE_VERSION`, default 2.1.268). Until 2026-09-18 the script
+  copied whatever `charlie` had installed, so a routine `goal-fanout` sync
+  silently moved Glorp to 2.1.276; it was restored before Glorp ran. Move Glorp
+  deliberately with `sudo GLORP_CLAUDE_VERSION=x.y.z glorp-sync-tools`.
 
 This replaces the Paperclip-secret idea in the first draft: the key now lives
 in exactly one place, which Glorp can't reach.
