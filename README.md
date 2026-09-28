@@ -26,6 +26,7 @@ run after every unit, and the finished branch comes back to a human for review.
 
 | Doc | Read it for |
 |---|---|
+| **[`ONBOARDING.md`](ONBOARDING.md)** | **Start here.** The whole system in one self-contained doc: lifecycle, contracts, trust boundaries, invariants, diagnostics, open items. Written so you don't have to probe the boxes to understand them. |
 | [`ENGINEER-GUIDE.md`](ENGINEER-GUIDE.md) | Giving Glorp work and reviewing the result. For engineers, not admins. |
 | [`Z440.md`](Z440.md) | The executor as built: model server and how to operate it, tuning and sampling, aider, `jobd`, the Paperclip bridge, context and speed measurements |
 | [`MINIPC.md`](MINIPC.md) | The orchestrator as built: Paperclip and its agents, quota guard, and **Glorp on DeepSeek** (meter, caps, isolation) |
