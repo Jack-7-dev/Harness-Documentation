@@ -668,3 +668,75 @@ backup file on the Z440 or mini PC marks when it landed.
   stays readable by root and the `infrareader` service only.
 - **Verity had the same 1200-character truncation** on its queue path; fixed
   the same way (`z440-verify.bak-prefulldesc`).
+- **The coverage gate accepted empty files (2026-09-28, found reviewing SOR-89).**
+  The SOR-63 gate tested `git diff --name-only "$START...HEAD"`, so a named file
+  counted as applied merely by appearing in the diff. A zero-byte create
+  satisfied that. SOR-89's own winning attempt proves the path is reachable:
+  aider committed `164b584c` with both named files at `0 insertions, 0 deletions`
+  and only filled them 4s later in `84fefa38`. Had it stopped after the first
+  commit the unit would have gone green — the gate passes, and so does the suite,
+  because `cloud-run` runs bare `mocha test/**/*.test.js` with no `.mocharc` and
+  no `--forbid-pending`, so an empty spec contributes no assertions and the empty
+  module is never required. That is the SOR-63 false-green class still open.
+  `jobd` now takes `--numstat` per named pathspec and fails the unit (exit 6)
+  unless that file's own commits add or delete at least one line; binary files
+  (`-` counts) and deletions still pass, and the `UNDER-APPLIED` line now
+  separates "Not changed at all" from "Committed empty, with no content".
+  Verified on a throwaway repo across content / empty / deletion / binary /
+  missing / mixed, and against the real commits: `164b584c` gives `0 0` for both
+  files and now fails, `84fefa38` gives `10 0` and `14 0` and still passes.
+  Backup `jobd.bak-preemptycontent`.
+- **Strike counting matched failure markers anywhere in any comment
+  (2026-09-28).** `z440-exec.strikes()` counted a comment as a strike if a
+  failure marker appeared anywhere in its body. Sentinel is an LLM writing prose
+  *about* those failures, so its diagnosis could be counted as a fresh strike and
+  silently spend the one cycle its rewrite was meant to buy. SOR-89 was safe only
+  because Sentinel happened to put the reset marker and the diagnosis in a single
+  comment (the reset index is excluded from the count), which nothing enforces.
+  Both bridges now match the marker at the *start* of the body and require the
+  comment to be the agent's own; unknown authorship still counts, so a miscount
+  can only stop early rather than retry on the GPU forever. `z440-verify` had the
+  same defect and looser: it matched the unbolded substring `z440 verify failed`
+  across *all* comments with no reset scoping, so a human writing that a verify
+  had failed consumed an infrastructure attempt and could park a goal `blocked`
+  early; its marker is now the constant `FAILURE_MARKER`, posted and matched from
+  one place. Tested against SOR-89's real comment history (unchanged: 3 strikes
+  before the reset, 0 after) plus the two Sentinel-prose shapes and a
+  genuine-failures-after-reset case. Backups `*.bak-prestrikeauthor`.
+- **Retry latency is the scheduler sweep, not the work (2026-09-28).**
+  `retry_monitor()` set the due time 10s out, but Paperclip's monitor tick rides
+  the heartbeat scheduler (`HEARTBEAT_SCHEDULER_INTERVAL_MS`, default 30000,
+  floored at 10000 in `config.ts`), so each of SOR-89's retries waited ~29s for
+  ~25s of work. The 10s was never a safety margin: `report()` releases the
+  checkout *before* the board write that schedules the monitor, so the checkout is
+  already gone when a due time first exists. Now 2s, which stops a long offset
+  from missing the next sweep. The remaining floor is the sweep itself and is a
+  service-level env change, deliberately not made here: it would triple the tick
+  rate for every agent, not just unit retries.
+- **`agent-prune` never pruned a branch checked out in a worktree (2026-09-28).**
+  `git branch --merged --list` marks the current branch `* ` and one checked out
+  in another worktree `+ `. The loop piped that through `tr -d ' '`, which left
+  the `+` attached, so it ran `git branch -d +agent/...` and failed every night
+  with `error: branch '+agent/20260921-150256-17508' not found`. It now reads
+  `--format='%(refname:short)'` and skips branches a live worktree holds with a
+  reason, leaving them for a later run once the worktree ages out. Tested on a
+  throwaway repo: prunes a free merged branch, skips an in-use merged branch
+  quietly, never touches an unmerged one. Backup
+  `agent-prune.bak-preworktreebranch`. **Not yet deployed** — the sandbox refused
+  the remote write. The tested file and its deploy commands are in
+  `~/harness/z440-pending/`.
+- **A retried unit keeps a `triggered` monitor after it goes `done`
+  (2026-09-28, not fixed).** SOR-89, SOR-83 and SOR-65 — every unit that used a
+  retry — end `done` with `executionState.monitor.status: "triggered"` and
+  `clearedAt: null`. It is inert, not a pending wake: the trigger already nulled
+  `monitorNextCheckAt` and stripped `executionPolicy`, and the dispatch query
+  requires `monitorNextCheckAt is not null`, so it cannot fire again even if a
+  human reopens the unit. Nor can the harness clear it. Paperclip rebuilds the
+  state from the `monitor*` columns in `derivePersistedMonitorState`, which
+  returns `triggered` whenever `lastTriggeredAt` or `attemptCount > 0`; the two
+  branches that write a `cleared` state both require a monitor still present in
+  the policy, which the trigger has already consumed, and any `executionState` an
+  agent submits is overwritten by that derived state. Confirmed present in the
+  deployed build (`~/.paperclip/.../dist/services/issue-execution-policy.js`), so
+  this is upstream display/audit behaviour, not a harness defect. Left alone
+  rather than patching a managed install.
