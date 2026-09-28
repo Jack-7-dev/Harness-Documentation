@@ -710,9 +710,11 @@ backup file on the Z440 or mini PC marks when it landed.
   ~25s of work. The 10s was never a safety margin: `report()` releases the
   checkout *before* the board write that schedules the monitor, so the checkout is
   already gone when a due time first exists. Now 2s, which stops a long offset
-  from missing the next sweep. The remaining floor is the sweep itself and is a
-  service-level env change, deliberately not made here: it would triple the tick
-  rate for every agent, not just unit retries.
+  from missing the next sweep. The sweep itself was then cut to the 10000ms floor
+  via a systemd drop-in on `paperclipai.service` (`MINIPC.md`), which also speeds
+  up every agent's timer heartbeat, not just unit retries. Restarted clean on an
+  idle board: banner `Heartbeat enabled (10000ms)`, health 200, no errors after
+  startup. Expect a retry to wake in ~2-12s instead of ~29s.
 - **`agent-prune` never pruned a branch checked out in a worktree (2026-09-28).**
   `git branch --merged --list` marks the current branch `* ` and one checked out
   in another worktree `+ `. The loop piped that through `tr -d ' '`, which left

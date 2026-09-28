@@ -54,6 +54,13 @@ Installed via the CLI directly: the published `install.sh` passes `--no-prompt`,
 which this CLI version rejects (upstream mismatch).
 Runs as `paperclipai.service` (systemd --user, enabled, linger on) — **not** as a
 foreground process, after a stray `timeout` killed the onboarding run once.
+One drop-in, `~/.config/systemd/user/paperclipai.service.d/10-heartbeat-interval.conf`,
+sets `HEARTBEAT_SCHEDULER_INTERVAL_MS=10000` (2026-09-28): the monitor tick that
+fires Zed's unit retries rides the heartbeat scheduler, and its 30s default was
+the whole retry latency. 10000 is the floor the server enforces; anything lower
+is silently raised. A drop-in rather than an edit, so `paperclipai service
+install` regenerating the unit keeps it. The banner confirms it on boot:
+`Heartbeat  enabled (10000ms)`.
 Company **Sorbit** `ddeaf594…`. Sorbit is the real product at `~/Sorbit` /
 `github.com/Sorbit-ltd/Sorbit`.
 
