@@ -722,9 +722,9 @@ backup file on the Z440 or mini PC marks when it landed.
   reason, leaving them for a later run once the worktree ages out. Tested on a
   throwaway repo: prunes a free merged branch, skips an in-use merged branch
   quietly, never touches an unmerged one. Backup
-  `agent-prune.bak-preworktreebranch`. **Not yet deployed** — the sandbox refused
-  the remote write. The tested file and its deploy commands are in
-  `~/harness/z440-pending/`.
+  `agent-prune.bak-preworktreebranch`. Deployed and run live: the nightly error
+  is replaced by `skipped .../agent/20260921-150256-17508 (checked out in a
+  worktree)`, with the branch and all 103 `agent/*` refs intact.
 - **A retried unit keeps a `triggered` monitor after it goes `done`
   (2026-09-28, not fixed).** SOR-89, SOR-83 and SOR-65 — every unit that used a
   retry — end `done` with `executionState.monitor.status: "triggered"` and
