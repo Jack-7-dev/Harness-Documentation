@@ -458,6 +458,7 @@ config snapshot is kept at `~/harness/state/glorp-config.claude.json`.
 | `~/harness/bin/z440-verify` | Verity's bridge: verify, loop-back, publish, handback |
 | `~/harness/bin/goal-fanout` | plan file → integration branch + units + verify issue. Refuses >12 units without `--force`. |
 | `~/harness/bin/glorp-brain` | switch Glorp between DeepSeek and Claude |
+| `~/harness/bin/z440-stale-sweeper` | wakes Zed for a unit stranded `in_progress` with no run. 5-min user timer, deployed 2026-09-30, log `~/harness/logs/stale-sweeper.log` (see `FANOUT.md`). |
 | `~/harness/bin/claude-quota-guard` | + `.timer`, every 5 min |
 | `~/harness/state/glorp-AGENTS.md` | **Glorp's instructions.** Scope discipline lives here. |
 | `~/harness/state/sentinel-AGENTS.md` | Sentinel's procedure |
@@ -679,6 +680,7 @@ Gotchas that will waste your time otherwise:
 | **Z440 disk** | 25 GB free of 231 GB (2026-09-18). `jobd` and `verifyd` have **no** free-space check; only `repo-add` does. A full disk fails jobs mid-run. |
 | **Sorbit only** | The one repo onboarded. `Z440_DEFAULT_REPO` should be dropped when a second arrives. |
 | **Stale `triggered` monitor** | Every unit that used a retry (SOR-89, SOR-83, SOR-65) ends `done` with `executionState.monitor.status: "triggered"`. **Inert** — the trigger nulled `monitorNextCheckAt` and the dispatch query requires it non-null, so it cannot fire even if a human reopens the unit. Not fixable from the harness: Paperclip rebuilds the state in `derivePersistedMonitorState`, which returns `triggered` whenever `attemptCount > 0`, and overwrites any `executionState` an agent submits. Upstream display/audit behaviour. Left alone. |
+| **Stranded units** | A unit can sit `in_progress` with no run (SOR-97, 2026-09-30: its assignment wake was consumed by a run working on SOR-96). Zed only wakes on assignment, so nothing recovers it. Cause is read from run records, not reproduced. `z440-stale-sweeper` handles Zed (never yet fired live); to recover by hand, `POST /api/agents/<zed>/wakeup {"payload":{"issueId":"<id>"}}`. Verity is not swept. |
 | **`local_trusted`** | No per-person audit trail; any local process on the mini PC is the board (§10) |
 | **LiteLLM master key** | No DB, so no virtual keys; the agent authenticates with the master key. Rotating means `/etc/litellm/env` *and* `/home/agent/.env`. |
 | **Test artifacts** | `agent/goal-smoke` + `agent/*` branches on Sorbit and 14 on `scratch`, unmerged so `agent-prune` leaves them. Issue SOR-4 parked `in_review`. Delete by hand when done. |

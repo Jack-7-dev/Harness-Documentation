@@ -742,3 +742,46 @@ backup file on the Z440 or mini PC marks when it landed.
   deployed build (`~/.paperclip/.../dist/services/issue-execution-policy.js`), so
   this is upstream display/audit behaviour, not a harness defect. Left alone
   rather than patching a managed install.
+- **A unit's assignment wake can be consumed by a run that works on a different
+  unit, stranding it `in_progress` (2026-09-30; sweeper deployed).** SOR-97 (unit 4 of the settings-page goal) sat `in_progress` with
+  no checkout, no run and no monitor from 12:06 to 13:01 while Zed idled, and
+  verify stayed blocked behind it. Zed's run `f82ebb1d` was created at 11:58:41,
+  when SOR-97 was assigned, and its wake payload still names SOR-97. It started
+  at 12:06:48 as the retry of SOR-96's first failed attempt: `retryOfRunId` is
+  the failed run and its `taskId` is SOR-96. Paperclip checked SOR-97 out from
+  the wake payload; `z440-exec` follows `PAPERCLIP_TASK_ID`, so it dispatched
+  SOR-96 and, on exit, released and left SOR-97 stranded. Zed wakes on
+  assignment only, so nothing woke it again. `report()` cannot fix this: it
+  cleans up claims `z440-exec` made, and this one it never did. Recovered by hand
+  with a targeted `POST /api/agents/<zed>/wakeup` carrying the issue id (run
+  `09519f9f` checked it out and finished in ~1 min).
+  **Not proven.** The merge is read from the run records only. Two attempts to
+  reproduce it on `scratch` failed: a failing unit with one passing unit queued
+  behind it, and with three queued behind it. In both, the retry became its own
+  `automation` run (`retryOfRunId` set, ahead of the queued units) and every unit
+  finished correctly. What differed in the real event is unknown; candidates are
+  the ~8 min the wake waited in the queue, the 4m22s first attempt, and timing.
+  Repro issues SOR-99 to SOR-104 and their unmerged `agent/*` branches on
+  `scratch` remain.
+  **Fix: `~/harness/bin/z440-stale-sweeper`** (new file, no backup). Wakes Zed for
+  a unit that is assigned to it, `in_progress`, with `checkoutRunId`,
+  `executionRunId` and `monitorNextCheckAt` all null, no queued/running Zed run
+  bound to it, and untouched for `STALE_MINUTES` (10). It fires only when Zed has
+  no queued or running run at all, because a wakeup made while the agent is busy
+  is coalesced and lost (the same behaviour `retry_monitor()` documents). At most
+  `SWEEP_MAX_WAKES` (2) wakes per issue, one per sweep, and it never touches
+  status, assignee, comments or checkout, so `z440-exec`'s three-strike refusal
+  still bounds GPU cost. It does nothing if Paperclip or a listing fails.
+  Verified against a fake Paperclip: stranded is woken; recent, checked out,
+  monitor pending, run bound, other assignee are left alone; a busy agent
+  defers; `--dry-run` sends nothing; the cap stops a third wake; a down or
+  non-loopback API is a no-op. A live `--dry-run` on the idle board correctly
+  found nothing. **Never exercised against a real stranded unit**, because none
+  could be fabricated safely: the only live check of the wake call is the manual
+  SOR-97 recovery. Unit files `z440-stale-sweeper.{service,timer}` (5-minute
+  timer, log `~/harness/logs/stale-sweeper.log`, state
+  `~/harness/state/stale-sweeper.json`) were installed and enabled by Charlie the
+  same day; the first sweep logged `no in_progress units assigned to the agent`
+  and the timer's next run was 5 min out. It has not yet fired on a stranded unit. Worst-case
+  detection is ~15 min (10 min grace plus one 5-min tick). It covers Zed only;
+  Verity units can strand the same way and are not swept.
