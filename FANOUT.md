@@ -885,7 +885,10 @@ behind them. They were never part of the harness.
   had been queued behind the offline runners; GitHub ended it as `cancelled`.
 - **Left alone:** docker on the Z440 (3 buildx builders, `sorbit_app_postgres_data`
   and `act-*` volumes, ~17 GB reclaimable) — looks like dev use, not runner use.
-- **Backup:** none on the box. Before-state (GitHub runner list, `setup-runners.sh`,
-  `runner-admit.sh`) saved in the session scratchpad only; re-registering would
-  need new tokens. This also makes the "no gateway/internet" side effect in the
+- **Backup:** none. The before-state (GitHub runner list, `setup-runners.sh`,
+  `runner-admit.sh`) was saved only to a temp scratchpad, which the mini PC's
+  2026-10-16 14:52 reboot wiped — so it is gone. Re-registering means a fresh
+  runner token and re-writing the setup by hand (runners were repo-level on
+  `Sorbit-ltd/Sorbit`, as `jack` from `~/actions-runner-N`, labels
+  `self-hosted,linux,sorbit-local`, plus `port-host` on #1). This also makes the "no gateway/internet" side effect in the
   2026-10-16 cable entry moot for CI; the clock is still unsynchronized.
