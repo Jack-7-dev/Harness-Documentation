@@ -20,7 +20,7 @@ run after every unit, and the finished branch comes back to a human for review.
 | Box | Address | Runs |
 |---|---|---|
 | **Mini PC** `charlie-Precision-WorkStation-T3500` | 192.168.1.121, tailnet 100.114.50.113 | Paperclip :3100, the agent bridges in `~/harness/bin`, DeepSeek meter, Glorp's isolated user |
-| **Z440** `jack-1-0` | 192.168.1.199 (static), LAN only | `llama.service` (Qwen3-Coder-30B-A3B, 64K) :8080, LiteLLM :4000, the sandboxed `agent` account with `jobd` / `verifyd` |
+| **Z440** `jack-1-0` | 192.168.1.199 (static), direct cable to the mini PC, no router | `llama.service` (Qwen3-Coder-30B-A3B, 64K) :8080, LiteLLM :4000, the sandboxed `agent` account with `jobd` / `verifyd` |
 
 ## Which doc
 

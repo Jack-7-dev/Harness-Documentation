@@ -785,3 +785,107 @@ backup file on the Z440 or mini PC marks when it landed.
   and the timer's next run was 5 min out. It has not yet fired on a stranded unit. Worst-case
   detection is ~15 min (10 min grace plus one 5-min tick). It covers Zed only;
   Verity units can strand the same way and are not swept.
+
+- **2026-10-05 — Code-quality prompt rules for Glorp and Zed** (full evidence in
+  [`QUALITY-EVAL.md`](QUALITY-EVAL.md)). Five goals on `scratch` (SOR-105, 108,
+  111, 114, 117) showed that the **planner**, not the coder, decides the quality of
+  code it embeds in a unit (the "new file under ~60 lines: paste it" rule): Qwen
+  copied `notes.py` and `orders.py` byte for byte, including a query-per-row loop
+  in both. Behaviour tests passed; `radon`/`bandit`/`lizard` were clean. Fix at
+  the writer: Glorp's `AGENTS.md` gained "The code you embed is your code" (no
+  query in a row loop, aggregate in SQL, parameterised SQL, neutralise CSV/HTML
+  output, one transaction, embedded tests are exact text and must `py_compile`),
+  then a mandatory "Code review" section in the dispatch comment. Proved by an
+  exact-spec A/B: the same spec produced N+1 under the old prompt and 1 SQL
+  statement (measured with `set_trace_callback`) under the new one, twice; CSV
+  formula cells were unescaped until the second change. Zed's `CONVENTIONS.md`
+  gained "Text the task gives you verbatim". **That rule did not fix** Zed
+  altering one test line in the same place in two runs; the cause is unknown, and
+  the per-unit gate that would catch it does not exist on `scratch` (no manifest),
+  so whether a retry repairs it is **not verified**. No reviewer agents were
+  added. Backups: `~/harness/state/glorp-AGENTS.md.bak-20261005` (before change
+  1), `…bak-20261005b` (before change 2),
+  `/home/agent/etc/CONVENTIONS.md.bak-prequalityrules`. 5 runs of toy
+  Python/SQLite modules; nothing run on Sorbit.
+
+- **2026-10-05 — `scratch` manifest added** (`/home/agent/etc/repos/scratch.json`,
+  new file, no backup). `tests`: `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q
+  -p no:cacheprovider`; no `base`. Before this `scratch` had no manifest, so
+  per-unit gates ran nothing (a unit reported success with a failing test) and
+  every verify went red with "no suite". Proved with `verifyd` on two existing
+  branches: `agent/goal-invoices-module` exit 0 (20 passed),
+  `agent/goal-purchases-module` exit 1 naming the altered test. Two live goals
+  (SOR-120, SOR-121) then went unit → verify green → `in_review`, first attempt,
+  no strikes. **Side effect:** `scratch` is no longer the "no manifest behaves as
+  before" regression guard (see the 2026-09 manifest entry); use another
+  throwaway repo for that. **Not verified:** the retry path; no unit failed, so
+  it was not exercised. See [`QUALITY-EVAL.md`](QUALITY-EVAL.md).
+
+- **2026-10-05 — Retry path exercised live for the first time on a real gate
+  failure** (SOR-130, `scratch`; no harness change). Hand-written plan via
+  `goal-fanout` naming a third file the task never mentions. Attempts 1–3 each
+  `exit 6` (`UNDER-APPLIED … Not changed at all: WORDCOUNT_NOTES.md`), retry
+  monitor fired each time, strike 3 posted the escalation, **Sentinel diagnosed it
+  correctly and rewrote the task** with full contents of all three files, the
+  next attempt passed, verify went green, goal `in_review`. A plain retry did not
+  fix it (identical failures); the Sentinel rewrite did. Also found:
+  `paperclipai issue create --description` converts a literal `\n` to a real
+  newline (reproduced; `\t` survives), which corrupts embedded test text with
+  escapes in it. The `child:create` path `goal-fanout` uses showed the same
+  symptom (Sentinel saw a raw newline in a string literal in attempt 1) but the
+  exact conversion point there was **not** traced. Not fixed. Three kept
+  worktrees from the failed attempts remain in `/home/agent/work` until
+  `agent-prune`. The earlier run-2/4 test mutation was not reproduced here, so
+  whether a retry repairs *that* is still unverified. See
+  [`QUALITY-EVAL.md`](QUALITY-EVAL.md).
+
+- **2026-10-16 — Mini PC ↔ Z440 moved from the router to a direct ethernet
+  cable.** No harness change; a mini-PC network change only. After the move
+  `enp3s0` had link (1 Gb/s) but no IPv4, so `192.168.1.199` gave *No route to
+  host*: `z440-tunnel` crash-looped (41 restarts) and the 11:21 `z440-sorbit-push`
+  failed. The Z440 was found via IPv6 link-local (`ff02::1` ping on `enp3s0`);
+  its ed25519 host key matched the `known_hosts` entry for `.199`. **Fix:** kept
+  the address, so the SSH aliases, tunnel unit, glorp nft allow-rule and sync
+  scripts are untouched. On the mini PC, `nmcli con mod "Wired connection 1"
+  ipv4.method manual ipv4.addresses 192.168.1.121/32 ipv4.routes
+  192.168.1.199/32` (route confirmed with `ip route get`, rtt ~0.3 ms). **Proved:**
+  `ssh z440`, tunnel active and `localhost:8080/health` ok, `z440-exec --selftest`
+  (`z440-job` reachable), glorp's `z440-job` ssh returns JSON, GPU lock free.
+  **Not verified:** a real goal end to end, and a fresh `z440-sorbit-push` run
+  (the one failure was during the outage); the route surviving a reboot (the
+  profile is saved, not rebooted). **Side effects:** the Z440's default gateway
+  `192.168.1.1` and DNS are now unreachable, so it has no internet (consistent
+  with LAN-only, but its GitHub Actions runners, not part of the harness, are
+  cut off); with no NTP source its clock reports "not synchronized" and may
+  drift (it matched the mini PC at 11:31 BST). Three `/home/agent/work`
+  worktrees from 2026-10-05 remain for `agent-prune`. Backup: none (new NM
+  settings; previous profile was DHCP `auto`).
+
+### 2026-10-16 — GitHub Actions runners removed from the Z440
+
+CI now runs on GitHub-hosted `ubuntu-latest`. The six self-hosted runners
+(`sorbit-local-1..6`, repo-level on `Sorbit-ltd/Sorbit`) were already offline
+after the direct-cable move (no internet), and today's nightly sat queued
+behind them. They were never part of the harness.
+
+- **Proved on hosted before switching:** `workflow_dispatch` with
+  `runner=github-hosted` on `prod-testing`: PR Gate (build-check, cloud-run
+  lint/unit/smoke/integration, e2e), Flutter E2E, Anthropic contract, both
+  guards — all green. After the default flip (Sorbit PR #485, merged 11:37 UTC)
+  the push-triggered Flutter E2E passed with no dispatch input.
+- **Changed:** PR #485 flips every `runner` default / `|| 'self-hosted'`
+  fallback to `github-hosted`; `self-hosted` is still a selectable input but
+  nothing serves it. The runners were deleted from GitHub, units stopped and
+  uninstalled (`svc.sh`), and `~/actions-runner-{1..6}`, `~/runner-admit.sh`,
+  `~/setup-runners.sh`, `/tmp/runner-admit.log` deleted. Disk 24 GB → 49 GB free.
+- **Not verified:** `prod-deploy` on hosted (live deploy; run once supervised).
+  `skip-audit` fails on hosted *and* did on self-hosted (pipefail + empty grep)
+  — pre-existing, not fixed. Hosted minutes: ~610 wall-clock min/month vs 2,000
+  free on the private-repo free plan. The 07:55 nightly run (38870259330)
+  had been queued behind the offline runners; GitHub ended it as `cancelled`.
+- **Left alone:** docker on the Z440 (3 buildx builders, `sorbit_app_postgres_data`
+  and `act-*` volumes, ~17 GB reclaimable) — looks like dev use, not runner use.
+- **Backup:** none on the box. Before-state (GitHub runner list, `setup-runners.sh`,
+  `runner-admit.sh`) saved in the session scratchpad only; re-registering would
+  need new tokens. This also makes the "no gateway/internet" side effect in the
+  2026-10-16 cable entry moot for CI; the clock is still unsynchronized.

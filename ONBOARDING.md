@@ -68,7 +68,7 @@ Two design commitments explain most of the structure:
 │  infra-reader   :4101         read-only GitHub/Neon/GCP + publish   │
 │  z440-tunnel                  ssh -L 8080 → the Z440's model server │
 └──────────────────────────────┬───────────────────────────────────────┘
-                               │  plain LAN SSH (not Tailscale)
+                               │  direct ethernet cable, SSH (not Tailscale)
                                │  three keys, three forced commands
 ┌──────────────────────────────┴───────────────────────────────────────┐
 │  Z440 · jack-1-0 · 192.168.1.199 (static) · LAN ONLY · ufw: 22/tcp  │
@@ -82,7 +82,12 @@ Two design commitments explain most of the structure:
 ```
 
 The mini PC is the box engineers reach, over Tailscale, as the shared `charlie`
-account. The Z440 is reachable only from the mini PC, over the LAN.
+account. The Z440 is reachable only from the mini PC, over a **direct ethernet cable**
+(`enp3s0` ↔ `eno1`, since 2026-10-16; there is no router on that link). The
+address `192.168.1.199` is kept so nothing else changes: the mini PC holds a
+persistent `/32` host route to it on `enp3s0` (NetworkManager profile "Wired
+connection 1"). If `ssh z440` says *No route to host*, check
+`ip route get 192.168.1.199` shows `dev enp3s0`.
 
 **Accounts that matter**
 
@@ -91,7 +96,7 @@ account. The Z440 is reachable only from the mini PC, over the LAN.
 | Mini PC | `charlie` | passwordless sudo; shared by all engineers; `ssh z440` as `jack` |
 | Mini PC | `glorp` | system user, no sudo, `no_new_privs`, uid-firewalled. Runs Glorp and Sentinel. |
 | Mini PC | `dsmeter` | owns the DeepSeek key |
-| Z440 | `jack` | owner, passwordless sudo. Also runs six GitHub Actions runners — *not* part of the harness. |
+| Z440 | `jack` | owner, passwordless sudo. No GitHub Actions runners (removed 2026-10-16; CI runs on GitHub-hosted runners). |
 | Z440 | `agent` | uid 1001, **no sudo**, home 0750, no GitHub credential. Everything the model writes happens here. |
 
 **SSH channels from the mini PC** — each key is pinned to one forced command, so
