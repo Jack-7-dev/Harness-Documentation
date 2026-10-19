@@ -915,9 +915,12 @@ with 192.168.1.199/24 and ssh worked within seconds.
   `job is not valid JSON`); `z440-exec --selftest` ssh check passes. Its API check
   returns 401 from an interactive shell — it needs the agent credentials Paperclip
   injects, so that part was not exercised. No full goal run or sorbit-push was done.
-- **`logrotate.service` failed since boot:** `/etc/logrotate.d/playit` points at
-  `/var/log/playit/playit.log`, which does not exist. Unrelated to the harness;
-  not changed (it is under /etc). A `missingok` line in that file would fix it.
+- **`logrotate.service` failed since boot — fixed 2026-10-19:** `/etc/logrotate.d/playit`
+  pointed at a log that never existed (playit.gg game-server tunnel agent, installed
+  2024-04, service disabled, unrelated to the harness). Removed with
+  `apt-get purge playit` (drops the logrotate config, `/opt/playit`, the unit),
+  plus `~/.config/playit_gg` (held a secret key — revoke it in the playit.gg account
+  if you want it dead) and the empty `/etc/playit`. logrotate now exits 0; no failed units.
 - **If it recurs:** from the mini PC, `ip -s link show enp3s0` — carrier up with
   RX 0 means the Z440 side is silent (not a mini PC/route problem). It needs a
   screen or a power cycle.
