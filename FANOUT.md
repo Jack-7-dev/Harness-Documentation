@@ -909,9 +909,15 @@ with 192.168.1.199/24 and ssh worked within seconds.
 
 - **Cause: not established.** Candidates: the Z440 hung or stalled during boot
   after the power event, or `eno1` was not brought up. Nothing was captured.
-- **After restart:** ssh fine; `logrotate.service` shows failed (not
-  investigated); `jobd`/`verifyd`/`syncd`/llama individually not re-checked and
-  no selftest or goal run was done.
+- **After restart (checked 2026-10-19):** Paperclip `/api/health` ok; `llama.service`
+  active, `:8080/health` ok, model resident (15.8 of 17.1 GB VRAM); the glorp ->
+  `z440-job` forced-command path answers (an empty job returns the expected
+  `job is not valid JSON`); `z440-exec --selftest` ssh check passes. Its API check
+  returns 401 from an interactive shell — it needs the agent credentials Paperclip
+  injects, so that part was not exercised. No full goal run or sorbit-push was done.
+- **`logrotate.service` failed since boot:** `/etc/logrotate.d/playit` points at
+  `/var/log/playit/playit.log`, which does not exist. Unrelated to the harness;
+  not changed (it is under /etc). A `missingok` line in that file would fix it.
 - **If it recurs:** from the mini PC, `ip -s link show enp3s0` — carrier up with
   RX 0 means the Z440 side is silent (not a mini PC/route problem). It needs a
   screen or a power cycle.
