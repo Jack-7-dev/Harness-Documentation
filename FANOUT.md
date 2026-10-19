@@ -883,8 +883,12 @@ behind them. They were never part of the harness.
   — pre-existing, not fixed. Hosted minutes: ~610 wall-clock min/month vs 2,000
   free on the private-repo free plan. The 07:55 nightly run (38870259330)
   had been queued behind the offline runners; GitHub ended it as `cancelled`.
-- **Left alone:** docker on the Z440 (3 buildx builders, `sorbit_app_postgres_data`
-  and `act-*` volumes, ~17 GB reclaimable) — looks like dev use, not runner use.
+- **Docker/toolcache cleanup (2026-10-19, by exact name):** removed the 3 buildx
+  builders (+ state volumes), 2 long-exited containers, the `sorbit-cloud-run:smoke`
+  image, 17 `act-*` CI scratch volumes and `~/hostedtoolcache` (runner tool
+  cache). Disk 48 GB -> 66 GB free. **Kept:** `pgvector/pgvector:pg16` and
+  `testcontainers/ryuk` (no internet to re-pull), `sorbit_app_postgres_data`, and
+  95 anonymous volumes (~17 GB) that were not inspected — they may hold data.
 - **Backup:** none. The before-state (GitHub runner list, `setup-runners.sh`,
   `runner-admit.sh`) was saved only to a temp scratchpad, which the mini PC's
   2026-10-16 14:52 reboot wiped — so it is gone. Re-registering means a fresh
