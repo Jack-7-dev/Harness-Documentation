@@ -892,3 +892,22 @@ behind them. They were never part of the harness.
   `Sorbit-ltd/Sorbit`, as `jack` from `~/actions-runner-N`, labels
   `self-hosted,linux,sorbit-local`, plus `port-host` on #1). This also makes the "no gateway/internet" side effect in the
   2026-10-16 cable entry moot for CI; the clock is still unsynchronized.
+
+### 2026-10-16/19 — Z440 silent on the direct cable until restarted
+
+After the mini PC rebooted (2026-10-16 14:52) the Z440 stopped answering on
+192.168.1.199 (`ARP FAILED`). The mini PC side was correct throughout: `enp3s0`
+up at 1 Gb, the persistent /32 route in place (it survived the reboot, which is
+the first time that was exercised), but `enp3s0` had received **0 bytes** since
+boot, i.e. the Z440 sent nothing at all. The Z440 has no screen, so the state it
+was in is unknown. A restart of the Z440 on 2026-10-19 fixed it: `eno1` came up
+with 192.168.1.199/24 and ssh worked within seconds.
+
+- **Cause: not established.** Candidates: the Z440 hung or stalled during boot
+  after the power event, or `eno1` was not brought up. Nothing was captured.
+- **After restart:** ssh fine; `logrotate.service` shows failed (not
+  investigated); `jobd`/`verifyd`/`syncd`/llama individually not re-checked and
+  no selftest or goal run was done.
+- **If it recurs:** from the mini PC, `ip -s link show enp3s0` — carrier up with
+  RX 0 means the Z440 side is silent (not a mini PC/route problem). It needs a
+  screen or a power cycle.
