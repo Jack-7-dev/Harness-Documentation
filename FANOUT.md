@@ -950,3 +950,36 @@ the Z440. To revoke, delete that key's line.
 
 - **Not verified:** the login from the laptop itself has not been tried; only the
   file contents and permissions (`0600`) were checked.
+
+### 2026-11-04 — Persistent GPU on/off toggle for the model, and the GPU wedge it exposed
+
+Requested so the model can be taken off the GPU and stay off across boots. Added on
+the Z440 (all new files, so there is no `.bak`; nothing existing was edited):
+`/usr/local/bin/llama-gpu`, drop-ins `/etc/systemd/system/{llama,llama-warmup}.service.d/10-gpu-toggle.conf`
+(`ConditionPathExists=!/etc/llama/gpu-disabled`), and
+`/etc/udev/rules.d/90-gpu-no-runtime-suspend.rules`. Usage is in Z440.md. The board
+was idle (no `aider`/`jobd`, `/home/agent/jobs` empty) when it was installed.
+
+- **What broke:** the first test unloaded the model with the GPU left on
+  `power/control=auto`. The idle GPU runtime-suspended and the resume failed
+  (`amdgpu: PSP load kdb failed`, `resume of IP block <psp> failed -62`,
+  `runtime_status=error`). `llama.service` then started with
+  `no ROCm-capable device is detected` and ran on the **CPU**. Setting
+  `power/control=on` did not clear it; a restart of the Z440 (by the user) did.
+  The model was down for roughly five minutes.
+- **Why it never showed before:** the resident model kept the GPU busy, so it never
+  idled. Any future "GPU idle" state, not just this toggle, is exposed to it.
+- **Fix:** the udev rule pins the card's `power/control` to `on`.
+- **Proved after the restart:** the flag survived the reboot and `llama.service` did
+  not start while `litellm` did; with the GPU idle (rule written, `control=on`) and
+  the model off, it stayed `active`; `llama-gpu on` loaded the model onto the GPU
+  (15.9 GB VRAM, health ok, no "no ROCm-capable" in the journal) and warmup ran.
+  Also proved before the restart: a direct `systemctl start llama.service`, a
+  `litellm` restart and `llama-warmup` all left the model off while the flag was set;
+  `off` refused while the GPU lock was held.
+- **Not verified:** the udev rule has been applied by `udevadm test` and by setting
+  the same value by hand, but not by a boot (`control` was `auto` after the restart,
+  since the rule did not yet exist). No reboot has been done with the model *on*
+  since the rule, and no goal run was done. dmesg shows
+  `amdgpu: failed to pin userptr` at model load; the load still succeeded and it was
+  not compared with an earlier boot.

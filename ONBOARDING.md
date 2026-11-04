@@ -484,6 +484,7 @@ config snapshot is kept at `~/harness/state/glorp-config.claude.json`.
 | `~/harness/deepseek-meter/`, `~/harness/glorp-user/` | sources for the installed services |
 | `~/.paperclip` | the managed Paperclip install (0700). **Reference only.** |
 | `~/.config/systemd/user/paperclipai.service.d/10-heartbeat-interval.conf` | the 10 s sweep drop-in |
+| `/usr/local/bin/llama-gpu`, `/etc/llama/gpu-disabled` | Z440: the model on/off toggle and its persistent flag (see Z440.md) |
 | `/etc/deepseek-meter/{key,config.json}` | key (dsmeter, 0600) and caps (root) |
 | `/etc/infra-reader/publish-key` | the one write credential |
 | `/opt/glorp/` | root-owned copies of Glorp's tools. `claude` pinned at 2.1.268. |
