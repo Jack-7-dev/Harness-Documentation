@@ -924,3 +924,17 @@ with 192.168.1.199/24 and ssh worked within seconds.
 - **If it recurs:** from the mini PC, `ip -s link show enp3s0` — carrier up with
   RX 0 means the Z440 side is silent (not a mini PC/route problem). It needs a
   screen or a power cycle.
+
+### 2026-11-04 — Z440 reached over wifi instead of the direct cable
+
+No harness change; a mini-PC network change only. The direct ethernet cable is no
+longer connected (`enp3s0` is `NO-CARRIER`); the Z440 stays at `192.168.1.199` on
+`eno1`, on the same LAN as the mini PC's wifi (`wlp2s0`, `192.168.1.121/24`).
+`ip route get 192.168.1.199` now shows `dev wlp2s0`, and `ssh z440` logs in
+passwordless with the same `~/.ssh/z440_key`. No config, key or backup file changed.
+
+- **Either path works.** With the cable back in, the persistent `/32` route on
+  `enp3s0` is more specific than the wifi `/24` and takes over again.
+- **Not verified:** only the `ssh z440` login and the Z440's addresses were checked.
+  `z440-job` / `z440-verify`, `z440-tunnel` and a full goal run over wifi have not
+  been exercised.

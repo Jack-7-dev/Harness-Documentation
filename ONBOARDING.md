@@ -68,7 +68,7 @@ Two design commitments explain most of the structure:
 │  infra-reader   :4101         read-only GitHub/Neon/GCP + publish   │
 │  z440-tunnel                  ssh -L 8080 → the Z440's model server │
 └──────────────────────────────┬───────────────────────────────────────┘
-                               │  direct ethernet cable, SSH (not Tailscale)
+                               │  direct cable or home wifi, SSH (not Tailscale)
                                │  three keys, three forced commands
 ┌──────────────────────────────┴───────────────────────────────────────┐
 │  Z440 · jack-1-0 · 192.168.1.199 (static) · LAN ONLY · ufw: 22/tcp  │
@@ -82,12 +82,23 @@ Two design commitments explain most of the structure:
 ```
 
 The mini PC is the box engineers reach, over Tailscale, as the shared `charlie`
-account. The Z440 is reachable only from the mini PC, over a **direct ethernet cable**
-(`enp3s0` ↔ `eno1`, since 2026-10-16; there is no router on that link). The
-address `192.168.1.199` is kept so nothing else changes: the mini PC holds a
-persistent `/32` host route to it on `enp3s0` (NetworkManager profile "Wired
-connection 1"). If `ssh z440` says *No route to host*, check
-`ip route get 192.168.1.199` shows `dev enp3s0`.
+account. The Z440 is reachable only from the mini PC, by SSH over **either of two paths**, same
+address both ways:
+
+- **Direct ethernet cable** (`enp3s0` ↔ `eno1`; used from 2026-10-16, no router on
+  that link). The mini PC holds a persistent `/32` host route to `192.168.1.199` on
+  `enp3s0` (NetworkManager profile "Wired connection 1"); it is only live while the
+  cable has carrier.
+- **The home LAN over wifi** (mini PC `wlp2s0`, `192.168.1.121/24`; in use from
+  2026-11-04, when the cable was removed). With no carrier on `enp3s0` the `/32`
+  route is gone and `192.168.1.199` is reached through the ordinary `/24` on `wlp2s0`.
+
+Nothing in the harness changes between the two: `~/.ssh/config`, the keys and the
+address are the same. To see which path is in use, `ip route get 192.168.1.199` shows
+`dev enp3s0` (cable) or `dev wlp2s0` (wifi). If `ssh z440` says *No route to host*
+with the cable plugged in, check `enp3s0` has carrier and that route. On wifi the link
+is shared with the rest of the LAN, so latency is less predictable than on the cable.
+Not verified: a full goal run over wifi (only `ssh z440` login was tested on 2026-11-04).
 
 **Accounts that matter**
 

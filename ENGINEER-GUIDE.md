@@ -33,7 +33,7 @@ You don't touch anything in between.
 | Machine | Role | What runs there |
 |---|---|---|
 | **Mini PC** (`charlie-precision-workstation-t3500`): **the one you Tailscale into** | Orchestrator | Paperclip (the web UI and task board) and the agents' control scripts |
-| **Z440** (`jack-1-0`, LAN only) | Executor | The Qwen3-Coder-30B model on the GPU, plus the sandboxed `agent` account that edits code and runs tests |
+| **Z440** (`jack-1-0`, LAN only: direct cable or wifi) | Executor | The Qwen3-Coder-30B model on the GPU, plus the sandboxed `agent` account that edits code and runs tests |
 
 You log in to the mini PC. From there, `ssh z440` gets you onto the Z440
 without a password, which is how you review the finished code (section 5).
