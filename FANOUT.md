@@ -938,3 +938,15 @@ passwordless with the same `~/.ssh/z440_key`. No config, key or backup file chan
 - **Not verified:** only the `ssh z440` login and the Z440's addresses were checked.
   `z440-job` / `z440-verify`, `z440-tunnel` and a full goal run over wifi have not
   been exercised.
+
+### 2026-11-04 — Laptop key added to `jack`'s authorized_keys on the Z440
+
+So an engineer's laptop on the same LAN can SSH to the Z440 directly (not via the
+mini PC). Added one `ssh-ed25519` public key (comment `jackbower835@gmail.com`) to
+`jack@jack-1-0:~/.ssh/authorized_keys`, appended after the existing
+`laptop-to-z440` key. It is an unrestricted key: full shell as `jack`, who has
+passwordless sudo. Before-state: `~/.ssh/authorized_keys.bak-before-laptop-key` on
+the Z440. To revoke, delete that key's line.
+
+- **Not verified:** the login from the laptop itself has not been tried; only the
+  file contents and permissions (`0600`) were checked.
