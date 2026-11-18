@@ -694,7 +694,7 @@ Gotchas that will waste your time otherwise:
 |---|---|
 | **Flutter tests don't run** | `flutter analyze` only; 115 `*_test.dart` files idle |
 | **Integration / Postgres / live suites** | Cannot run, by design (docker = root on the Z440) |
-| **Z440 disk** | 25 GB free of 231 GB (2026-09-18). `jobd` and `verifyd` have **no** free-space check; only `repo-add` does. A full disk fails jobs mid-run. |
+| **Z440 disk** | 47 GB free of 231 GB (2026-11-16, with the Qwen3.6 trial model on disk; 25 GB on 2026-09-18). `jobd` and `verifyd` have **no** free-space check; only `repo-add` does. A full disk fails jobs mid-run. |
 | **Sorbit only** | The one repo onboarded. `Z440_DEFAULT_REPO` should be dropped when a second arrives. |
 | **Stale `triggered` monitor** | Every unit that used a retry (SOR-89, SOR-83, SOR-65) ends `done` with `executionState.monitor.status: "triggered"`. **Inert** — the trigger nulled `monitorNextCheckAt` and the dispatch query requires it non-null, so it cannot fire even if a human reopens the unit. Not fixable from the harness: Paperclip rebuilds the state in `derivePersistedMonitorState`, which returns `triggered` whenever `attemptCount > 0`, and overwrites any `executionState` an agent submits. Upstream display/audit behaviour. Left alone. |
 | **Stranded units** | A unit can sit `in_progress` with no run (SOR-97, 2026-09-30: its assignment wake was consumed by a run working on SOR-96). Zed only wakes on assignment, so nothing recovers it. Cause is read from run records, not reproduced. `z440-stale-sweeper` handles Zed (never yet fired live); to recover by hand, `POST /api/agents/<zed>/wakeup {"payload":{"issueId":"<id>"}}`. Verity is not swept. |

@@ -983,3 +983,86 @@ was idle (no `aider`/`jobd`, `/home/agent/jobs` empty) when it was installed.
   since the rule, and no goal run was done. dmesg shows
   `amdgpu: failed to pin userptr` at model load; the load still succeeded and it was
   not compared with an earlier boot.
+
+### 2026-11-16 — Remaining CI Docker leftovers removed from the Z440
+
+Not a harness change (the harness does not use docker); disk housekeeping after the
+2026-10-16 runner removal. Disk 55 GB -> 68 GB free (70% used).
+
+- **Removed, by exact ID:** the 17 untagged images left by old CI builds, the
+  `moby/buildkit:buildx-stable-1` image (its builders went on 2026-10-19), and 94
+  of the 95 anonymous volumes the 2026-10-19 entry left uninspected. Inspected
+  this time: 92 were Postgres data directories (`PG_VERSION` present) created
+  July to September, 2 were empty. No container existed, so nothing was using them.
+- **Kept:** `pgvector/pgvector:pg16` and `testcontainers/ryuk:0.14.0`, the named
+  `sorbit_app_postgres_data` volume, and one anonymous volume (`8a3d4f7b…`, 192 KB,
+  dated 2026-03-04) holding a pgAdmin config (`pgadmin4.db`, `azurecredentialcache`).
+- **Backup:** none; the Postgres volumes were not dumped or opened beyond checking
+  for `PG_VERSION`.
+- **Not verified / noticed:** `llama.service` was `inactive` (`litellm` active) and
+  `/etc/llama/gpu-disabled` was not checked. `/opt/playit` exists again (binaries
+  dated 2026-10-29, directory 2026-11-04) although the 2026-10-19 entry records it
+  purged; not investigated. Still reclaimable, untouched: `~/.cache/act` (343 MB),
+  the journal (3.4 GB, no size cap) and 14 disabled snap revisions.
+
+### 2026-11-16 — Trial of Qwen3.6-35B-A3B as Zed's model (set up, not switched)
+
+Candidate replacement for Qwen3-Coder-30B-A3B: same 3B-active MoE shape, one
+generation newer (Apache 2.0, released 2026-04). **`llama.service` is unchanged and
+still the configured model; nothing was switched.** Board idle throughout (no
+`in_progress`, `work/` + `jobs/` empty, GPU lock free). No existing file was edited,
+so there is no `.bak`.
+
+- **Added on the Z440:** `~/models/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf` (22.4 GB, Unsloth,
+  sha256 `707a55a8…` matches Hugging Face) and `/etc/systemd/system/llama-trial.service`
+  (static, never enabled; `Conflicts=llama.service llama-warmup.service`). It serves
+  on the same `127.0.0.1:8080` and alias `qwen3-coder`, so litellm, aider and `jobd`
+  are untouched. It does **not** carry the `gpu-disabled` condition. To run it:
+  `sudo systemctl start llama-trial.service`; stop it to free the GPU. Left stopped.
+- **Flags that differ from `llama.service`:** `--n-cpu-moe 17` (15.4 GB VRAM at 64K;
+  20 gave 14.0 GB), `--reasoning off` (the model thinks by default), `--repeat-penalty
+  1.0 --presence-penalty 0` (the card recommends presence 1.5 for non-thinking; not
+  used, on the reasoning that it works against verbatim SEARCH/REPLACE text; that
+  choice was not A/B tested), `--cache-ram 0 --ctx-checkpoints 0` (see below).
+  Build 10743 loads the `qwen35moe` architecture without a rebuild.
+- **Probes**, replayed through `ssh z440-job` with the original task text and **no
+  `base`**, so each job left only a throwaway `agent/20261116-*` branch and nothing
+  was fast-forwarded or published. Baseline is the *recorded* result for the current
+  model, not a same-day run (the model is toggled off and the flag was left alone).
+
+  | Probe | Qwen3-Coder (recorded) | Qwen3.6-35B-A3B |
+  |---|---|---|
+  | SOR-115 `purchases` unit, `scratch` | test line altered 2/2, 1 test fails | **5/5 byte-identical** to the embedded text, 19 passed |
+  | SOR-8 JSDoc on `prompt-builders.js` | 12 lines deleted pre-CONVENTIONS, +4/-0 after | 3/3 additive (+5/-0, +5/-0, +4/-0) |
+  | `chatpage.dart` one-line comment | 132 s wall, 533 prefill / 17.0 generate tok/s at 29.2k tokens | 100–114 s, 445–462 / 26–27 at 30.2–31.6k |
+  | `teacherParentHome.dart` | 175 s, 481 / 15.4 at 40.8k | 137–141 s, 412–420 / 24.5 at 44.8k |
+
+  Short prompts generate at ~29 tok/s (was ~20). The new tokenizer yields more tokens
+  for the same file, and the files may have moved since September, so the Dart rows
+  are indicative, not like for like.
+- **What broke: the server wedged, twice.** With default prompt caching, the sixth
+  job hung on a small follow-up request: first a 142 s "prompt eval" of 4 tokens, then
+  no progress at all, one thread at 100% CPU. The kernel logged
+  `amdgpu … kfd_svm: svm_range_dma_map_dev: failed -12 dma_map_page` continuously from
+  the same minute (11,589 lines in the first minute). Restarting with `--cache-ram 1024
+  --ctx-checkpoints 4` wedged again on the second request. With `--cache-ram 0
+  --ctx-checkpoints 0` the stuck job finished and a six-job soak (2 purchases, 2 JSDoc,
+  2 Dart) ran with **zero** `kfd_svm` lines. Both hangs were on a request that restored
+  a context checkpoint.
+- **Cause: not established.** Fits both "context-checkpoint restore path for this
+  hybrid architecture on ROCm" and "host RAM pressure": this model keeps ~10 GB of
+  experts in system RAM, a Minecraft server (`java -Xmx6G`, 7.3 GB RSS, not part of the
+  harness) is running on the Z440, and 2.4 GB of swap was in use. Neither was isolated.
+  Cost of no cache: aider's commit-message requests re-read ~6.8k tokens (~12 s each).
+- **Not verified:** a goal through Paperclip (Glorp → Zed → Verity) on this model;
+  retries; JS/Dart edits of any substance (the Sorbit probes are one-line or comment
+  edits); anything beyond ~20 minutes of continuous serving; a reboot. Samples are
+  small (5 + 3 + 4 runs). `aider` printed `Summarization failed … cannot schedule new
+  futures after shutdown` at the end of the purchases runs; whether the current model
+  does the same was not checked (one older log has it).
+- **Residue:** throwaway branches `agent/20261116-{142843-14065,143734-31541,144031-13546,150459-27739,151025-9152}`
+  on `scratch` and `agent/20261116-{143208-10593,143251-3992,143445-10645,150817-21067,150845-23461,151331-17508,151547-17060}`
+  on the Sorbit checkout (unmerged, so `agent-prune` leaves them); `~/models/qwen36-download.log`.
+  Disk 68 GB -> 47 GB free (79%).
+- **To switch for real** (not done): point `llama.service`'s `-m` and flags at the trial
+  values with a `.bak`, keep `max_input_tokens` at 65536, and run a real goal first.
